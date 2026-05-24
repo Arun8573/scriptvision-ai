@@ -198,10 +198,22 @@ function Workspace() {
               Convert handwriting to text
             </h1>
             <p className="text-zinc-400 mt-2 text-sm max-w-lg">
-              OCR runs in your browser. AI cleanup is the secret sauce — it fixes recognition errors using language context.
+              AI Vision reads handwriting directly with a multimodal model (highest accuracy). Tesseract runs offline in your browser.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 uppercase">
+              <span>Engine</span>
+              <select
+                value={engine}
+                onChange={(e) => setEngine(e.target.value as Engine)}
+                disabled={status === "loading"}
+                className="bg-zinc-900 ring-1 ring-white/10 rounded-md px-2 py-1.5 text-xs text-zinc-200 font-sans"
+              >
+                <option value="ai">AI Vision (best)</option>
+                <option value="tesseract">Tesseract (offline)</option>
+              </select>
+            </label>
             <label className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 uppercase">
               <span>Lang</span>
               <select
@@ -215,6 +227,7 @@ function Workspace() {
                 ))}
               </select>
             </label>
+            {engine === "tesseract" && (
             <label className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 uppercase cursor-pointer">
               <input
                 type="checkbox"
@@ -224,6 +237,7 @@ function Workspace() {
               />
               AI enhance
             </label>
+            )}
             {status === "done" && (
               <button
                 onClick={reset}
