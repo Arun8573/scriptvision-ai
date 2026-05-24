@@ -3,6 +3,7 @@ import { useCallback, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Tesseract from "tesseract.js";
 import { Nav } from "@/components/site/Nav";
+import { exportTxt, exportPdf, exportDocx } from "@/lib/exporters";
 
 export const Route = createFileRoute("/workspace")({
   head: () => ({
@@ -16,9 +17,38 @@ export const Route = createFileRoute("/workspace")({
 
 type Status = "idle" | "loading" | "done" | "error";
 
+const OCR_LANGS: { code: string; label: string }[] = [
+  { code: "eng", label: "English" },
+  { code: "spa", label: "Spanish" },
+  { code: "fra", label: "French" },
+  { code: "deu", label: "German" },
+  { code: "ita", label: "Italian" },
+  { code: "por", label: "Portuguese" },
+  { code: "nld", label: "Dutch" },
+  { code: "rus", label: "Russian" },
+  { code: "chi_sim", label: "Chinese (Simplified)" },
+  { code: "jpn", label: "Japanese" },
+  { code: "kor", label: "Korean" },
+  { code: "ara", label: "Arabic" },
+  { code: "hin", label: "Hindi" },
+];
+
+const TRANSLATE_TARGETS = [
+  "English", "Spanish", "French", "German", "Italian", "Portuguese",
+  "Dutch", "Russian", "Chinese", "Japanese", "Korean", "Arabic", "Hindi",
+];
+
+type AiAction = "cleanup" | "summarize" | "translate";
+
 function Workspace() {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [text, setText] = useState("");
+  const [aiOutput, setAiOutput] = useState<string>("");
+  const [aiBusy, setAiBusy] = useState<AiAction | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [lang, setLang] = useState<string>("eng");
+  const [target, setTarget] = useState<string>("English");
+  const [autoEnhance, setAutoEnhance] = useState(true);
   const [status, setStatus] = useState<Status>("idle");
   const [progress, setProgress] = useState(0);
   const [confidence, setConfidence] = useState<number | null>(null);
@@ -30,24 +60,60 @@ function Workspace() {
     setStatus("loading");
     setProgress(0);
     setText("");
+    setAiOutput("");
+    setAiError(null);
     setConfidence(null);
     setErrorMsg(null);
     const url = URL.createObjectURL(file);
     setImageUrl(url);
     try {
-      const result = await Tesseract.recognize(file, "eng", {
+      const result = await Tesseract.recognize(file, lang, {
         logger: (m) => {
           if (m.status === "recognizing text") setProgress(Math.round(m.progress * 100));
         },
       });
-      setText(result.data.text.trim());
+      const raw = result.data.text.trim();
+      setText(raw);
       setConfidence(Math.round(result.data.confidence));
       setStatus("done");
+      if (autoEnhance && raw.length > 0) {
+        void runAi("cleanup", raw, true);
+      }
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : "Recognition failed");
       setStatus("error");
     }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lang, autoEnhance]);
+
+  const runAi = async (action: AiAction, input?: string, replaceMain = false) => {
+    const source = input ?? text;
+    if (!source.trim()) return;
+    setAiBusy(action);
+    setAiError(null);
+    try {
+      const res = await fetch("/api/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: action,
+          text: source,
+          targetLanguage: action === "translate" ? target : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "AI request failed");
+      if (action === "cleanup" && replaceMain) {
+        setText(data.result);
+      } else {
+        setAiOutput(data.result);
+      }
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : "AI failed");
+    } finally {
+      setAiBusy(null);
+    }
+  };
 
   const onFile = (f?: File | null) => {
     if (!f) return;
@@ -68,6 +134,8 @@ function Workspace() {
   const reset = () => {
     setImageUrl(null);
     setText("");
+    setAiOutput("");
+    setAiError(null);
     setStatus("idle");
     setProgress(0);
     setConfidence(null);
@@ -80,14 +148,11 @@ function Workspace() {
     await navigator.clipboard.writeText(text);
   };
 
-  const downloadText = () => {
-    const blob = new Blob([text], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "ink2text.txt";
-    a.click();
-    URL.revokeObjectURL(url);
+  const speak = () => {
+    if (!text || typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    window.speechSynthesis.speak(u);
   };
 
   return (
@@ -103,17 +168,41 @@ function Workspace() {
               Convert handwriting to text
             </h1>
             <p className="text-zinc-400 mt-2 text-sm max-w-lg">
-              Runs entirely in your browser. Your image never leaves your device.
+              OCR runs in your browser. AI cleanup is the secret sauce — it fixes recognition errors using language context.
             </p>
           </div>
-          {status === "done" && (
-            <button
-              onClick={reset}
-              className="self-start md:self-auto px-4 py-2 text-sm rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700 transition-colors"
-            >
-              New scan
-            </button>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 uppercase">
+              <span>Lang</span>
+              <select
+                value={lang}
+                onChange={(e) => setLang(e.target.value)}
+                disabled={status === "loading"}
+                className="bg-zinc-900 ring-1 ring-white/10 rounded-md px-2 py-1.5 text-xs text-zinc-200 font-sans"
+              >
+                {OCR_LANGS.map((l) => (
+                  <option key={l.code} value={l.code}>{l.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 uppercase cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoEnhance}
+                onChange={(e) => setAutoEnhance(e.target.checked)}
+                className="accent-accent-blue"
+              />
+              AI enhance
+            </label>
+            {status === "done" && (
+              <button
+                onClick={reset}
+                className="px-4 py-2 text-sm rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700 transition-colors"
+              >
+                New scan
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -234,20 +323,67 @@ function Workspace() {
                     onChange={(e) => setText(e.target.value)}
                     className="flex-1 w-full rounded-xl bg-ink-800/50 ring-1 ring-white/5 p-6 font-mono text-sm leading-relaxed text-zinc-200 resize-none focus:outline-none focus:ring-accent-blue/40"
                   />
-                  <div className="flex gap-2 mt-4">
-                    <button
-                      onClick={copyText}
-                      className="px-4 py-2 text-sm rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700 transition-colors"
-                    >
-                      Copy text
-                    </button>
-                    <button
-                      onClick={downloadText}
-                      className="px-4 py-2 text-sm rounded-md bg-accent-blue text-white hover:bg-accent-blue/90 transition-colors ring-2 ring-accent-blue/20"
-                    >
-                      Download .txt
-                    </button>
+                  {aiBusy === "cleanup" && (
+                    <div className="mt-3 text-[10px] font-mono text-accent-blue uppercase animate-pulse">
+                      AI enhancing text…
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2 mt-4">
+                    <button onClick={copyText} className="px-3 py-2 text-xs rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700">Copy</button>
+                    <button onClick={() => exportTxt(text)} className="px-3 py-2 text-xs rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700">.txt</button>
+                    <button onClick={() => exportPdf(text)} className="px-3 py-2 text-xs rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700">.pdf</button>
+                    <button onClick={() => void exportDocx(text)} className="px-3 py-2 text-xs rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700">.docx</button>
+                    <button onClick={speak} className="px-3 py-2 text-xs rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700">Read aloud</button>
                   </div>
+                  <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-white/5">
+                    <button
+                      onClick={() => void runAi("cleanup", text, true)}
+                      disabled={aiBusy !== null}
+                      className="px-3 py-2 text-xs rounded-md bg-accent-blue/20 text-accent-blue ring-1 ring-accent-blue/30 hover:bg-accent-blue/30 disabled:opacity-50"
+                    >
+                      {aiBusy === "cleanup" ? "Enhancing…" : "AI enhance"}
+                    </button>
+                    <button
+                      onClick={() => void runAi("summarize", text)}
+                      disabled={aiBusy !== null}
+                      className="px-3 py-2 text-xs rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700 disabled:opacity-50"
+                    >
+                      {aiBusy === "summarize" ? "Summarizing…" : "Summarize"}
+                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => void runAi("translate", text)}
+                        disabled={aiBusy !== null}
+                        className="px-3 py-2 text-xs rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700 disabled:opacity-50"
+                      >
+                        {aiBusy === "translate" ? "Translating…" : "Translate →"}
+                      </button>
+                      <select
+                        value={target}
+                        onChange={(e) => setTarget(e.target.value)}
+                        className="bg-zinc-900 ring-1 ring-white/10 rounded-md px-2 py-2 text-xs text-zinc-200"
+                      >
+                        {TRANSLATE_TARGETS.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  {aiError && (
+                    <p className="mt-3 text-xs text-red-400">{aiError}</p>
+                  )}
+                  {aiOutput && (
+                    <div className="mt-4 rounded-xl bg-ink-900/70 ring-1 ring-white/5 p-4 max-h-64 overflow-auto">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] font-mono text-accent-blue uppercase">AI output</span>
+                        <button
+                          onClick={() => navigator.clipboard.writeText(aiOutput)}
+                          className="text-[10px] font-mono text-zinc-400 hover:text-zinc-200 uppercase"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                      <pre className="whitespace-pre-wrap text-sm text-zinc-200 font-sans leading-relaxed">{aiOutput}</pre>
+                    </div>
+                  )}
                 </motion.div>
               )}
 
