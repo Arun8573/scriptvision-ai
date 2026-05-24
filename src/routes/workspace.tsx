@@ -16,6 +16,7 @@ export const Route = createFileRoute("/workspace")({
 });
 
 type Status = "idle" | "loading" | "done" | "error";
+type Engine = "ai" | "tesseract";
 
 const OCR_LANGS: { code: string; label: string }[] = [
   { code: "eng", label: "English" },
@@ -49,12 +50,23 @@ function Workspace() {
   const [lang, setLang] = useState<string>("eng");
   const [target, setTarget] = useState<string>("English");
   const [autoEnhance, setAutoEnhance] = useState(true);
+  const [engine, setEngine] = useState<Engine>("ai");
   const [status, setStatus] = useState<Status>("idle");
   const [progress, setProgress] = useState(0);
   const [confidence, setConfidence] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const fileToDataUrl = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result as string);
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(file);
+    });
+
+  const langLabel = OCR_LANGS.find((l) => l.code === lang)?.label;
 
   const runOcr = useCallback(async (file: File) => {
     setStatus("loading");
@@ -67,24 +79,42 @@ function Workspace() {
     const url = URL.createObjectURL(file);
     setImageUrl(url);
     try {
-      const result = await Tesseract.recognize(file, lang, {
-        logger: (m) => {
-          if (m.status === "recognizing text") setProgress(Math.round(m.progress * 100));
-        },
-      });
-      const raw = result.data.text.trim();
-      setText(raw);
-      setConfidence(Math.round(result.data.confidence));
-      setStatus("done");
-      if (autoEnhance && raw.length > 0) {
-        void runAi("cleanup", raw, true);
+      if (engine === "ai") {
+        setProgress(20);
+        const dataUrl = await fileToDataUrl(file);
+        setProgress(45);
+        const res = await fetch("/api/ocr", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageDataUrl: dataUrl, language: langLabel }),
+        });
+        setProgress(85);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error ?? "AI OCR failed");
+        setText((data.text ?? "").trim());
+        setConfidence(null);
+        setProgress(100);
+        setStatus("done");
+      } else {
+        const result = await Tesseract.recognize(file, lang, {
+          logger: (m) => {
+            if (m.status === "recognizing text") setProgress(Math.round(m.progress * 100));
+          },
+        });
+        const raw = result.data.text.trim();
+        setText(raw);
+        setConfidence(Math.round(result.data.confidence));
+        setStatus("done");
+        if (autoEnhance && raw.length > 0) {
+          void runAi("cleanup", raw, true);
+        }
       }
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : "Recognition failed");
       setStatus("error");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lang, autoEnhance]);
+  }, [lang, autoEnhance, engine, langLabel]);
 
   const runAi = async (action: AiAction, input?: string, replaceMain = false) => {
     const source = input ?? text;
@@ -168,10 +198,22 @@ function Workspace() {
               Convert handwriting to text
             </h1>
             <p className="text-zinc-400 mt-2 text-sm max-w-lg">
-              OCR runs in your browser. AI cleanup is the secret sauce — it fixes recognition errors using language context.
+              AI Vision reads handwriting directly with a multimodal model (highest accuracy). Tesseract runs offline in your browser.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 uppercase">
+              <span>Engine</span>
+              <select
+                value={engine}
+                onChange={(e) => setEngine(e.target.value as Engine)}
+                disabled={status === "loading"}
+                className="bg-zinc-900 ring-1 ring-white/10 rounded-md px-2 py-1.5 text-xs text-zinc-200 font-sans"
+              >
+                <option value="ai">AI Vision (best)</option>
+                <option value="tesseract">Tesseract (offline)</option>
+              </select>
+            </label>
             <label className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 uppercase">
               <span>Lang</span>
               <select
@@ -185,6 +227,7 @@ function Workspace() {
                 ))}
               </select>
             </label>
+            {engine === "tesseract" && (
             <label className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 uppercase cursor-pointer">
               <input
                 type="checkbox"
@@ -194,6 +237,7 @@ function Workspace() {
               />
               AI enhance
             </label>
+            )}
             {status === "done" && (
               <button
                 onClick={reset}
