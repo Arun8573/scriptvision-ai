@@ -1,6 +1,8 @@
 import { jsPDF } from "jspdf";
 import { Document, Packer, Paragraph, TextRun } from "docx";
-import { saveAs } from "file-saver";
+import FileSaver from "file-saver";
+
+const saveAs = FileSaver.saveAs;
 
 export function exportTxt(text: string, filename = "ink2text.txt") {
   saveAs(new Blob([text], { type: "text/plain;charset=utf-8" }), filename);
