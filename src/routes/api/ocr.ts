@@ -1,9 +1,29 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+const ALLOWED_LANGUAGES = new Set([
+  "English","Spanish","French","German","Italian","Portuguese","Dutch","Russian",
+  "Chinese","Japanese","Korean","Arabic","Hindi","Turkish","Polish","Swedish",
+  "Norwegian","Danish","Finnish","Greek","Hebrew","Thai","Vietnamese","Indonesian",
+  "Ukrainian","Czech","Romanian","Hungarian",
+]);
+
+function sameOrigin(request: Request): boolean {
+  const origin = request.headers.get("origin") ?? request.headers.get("referer");
+  if (!origin) return false;
+  try {
+    return new URL(origin).origin === new URL(request.url).origin;
+  } catch {
+    return false;
+  }
+}
+
 export const Route = createFileRoute("/api/ocr")({
   server: {
     handlers: {
       POST: async ({ request }) => {
+        if (!sameOrigin(request)) {
+          return Response.json({ error: "Forbidden" }, { status: 403 });
+        }
         const apiKey = process.env.LOVABLE_API_KEY;
         if (!apiKey) {
           return Response.json({ error: "LOVABLE_API_KEY missing" }, { status: 500 });
@@ -21,6 +41,13 @@ export const Route = createFileRoute("/api/ocr")({
         if (imageDataUrl.length > 12_000_000) {
           return Response.json({ error: "Image too large (max ~9MB)" }, { status: 413 });
         }
+        let safeLanguage: string | undefined;
+        if (language !== undefined && language !== null && language !== "") {
+          if (!ALLOWED_LANGUAGES.has(language)) {
+            return Response.json({ error: "Invalid language" }, { status: 400 });
+          }
+          safeLanguage = language;
+        }
 
         const system =
           "You are a world-class handwriting OCR engine. Transcribe the handwritten text in the image EXACTLY as written. " +
@@ -28,8 +55,8 @@ export const Route = createFileRoute("/api/ocr")({
           "Do not translate, summarize, explain, add commentary, or use code fences. " +
           "If something is illegible, write [illegible]. Output ONLY the transcribed text.";
 
-        const userText = language
-          ? `Transcribe this handwriting. Expected language: ${language}.`
+        const userText = safeLanguage
+          ? `Transcribe this handwriting. Expected language: ${safeLanguage}.`
           : "Transcribe this handwriting.";
 
         const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
