@@ -2,6 +2,25 @@ import { createFileRoute } from "@tanstack/react-router";
 
 type Mode = "cleanup" | "summarize" | "translate";
 
+const ALLOWED_LANGUAGES = new Set([
+  "English","Spanish","French","German","Italian","Portuguese","Dutch","Russian",
+  "Chinese","Japanese","Korean","Arabic","Hindi","Turkish","Polish","Swedish",
+  "Norwegian","Danish","Finnish","Greek","Hebrew","Thai","Vietnamese","Indonesian",
+  "Ukrainian","Czech","Romanian","Hungarian",
+]);
+
+function sameOrigin(request: Request): boolean {
+  const origin = request.headers.get("origin") ?? request.headers.get("referer");
+  if (!origin) return false;
+  try {
+    const o = new URL(origin).origin;
+    const host = new URL(request.url).origin;
+    return o === host;
+  } catch {
+    return false;
+  }
+}
+
 const SYSTEMS: Record<Mode, (lang?: string) => string> = {
   cleanup: () =>
     "You are an expert OCR post-processor for handwritten notes. Fix recognition errors, restore correct spelling, punctuation, casing, and line breaks. Preserve the author's wording, meaning, and language. Do NOT translate. Do NOT summarize. Do NOT add commentary. Return ONLY the corrected text.",
@@ -15,6 +34,9 @@ export const Route = createFileRoute("/api/ai")({
   server: {
     handlers: {
       POST: async ({ request }) => {
+        if (!sameOrigin(request)) {
+          return Response.json({ error: "Forbidden" }, { status: 403 });
+        }
         const apiKey = process.env.LOVABLE_API_KEY;
         if (!apiKey) {
           return Response.json({ error: "LOVABLE_API_KEY missing" }, { status: 500 });
@@ -32,6 +54,13 @@ export const Route = createFileRoute("/api/ai")({
         if (text.length > 20000) {
           return Response.json({ error: "Text too long (max 20k chars)" }, { status: 400 });
         }
+        let safeLang: string | undefined;
+        if (mode === "translate") {
+          if (!targetLanguage || !ALLOWED_LANGUAGES.has(targetLanguage)) {
+            return Response.json({ error: "Invalid targetLanguage" }, { status: 400 });
+          }
+          safeLang = targetLanguage;
+        }
 
         const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
           method: "POST",
@@ -42,7 +71,7 @@ export const Route = createFileRoute("/api/ai")({
           body: JSON.stringify({
             model: "google/gemini-2.5-flash",
             messages: [
-              { role: "system", content: SYSTEMS[mode](targetLanguage) },
+              { role: "system", content: SYSTEMS[mode](safeLang) },
               { role: "user", content: text },
             ],
           }),
