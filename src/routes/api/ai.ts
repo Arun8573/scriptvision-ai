@@ -39,7 +39,13 @@ export const Route = createFileRoute("/api/ai")({
         }
         const apiKey = process.env.LOVABLE_API_KEY;
         if (!apiKey) {
-          return Response.json({ error: "LOVABLE_API_KEY missing" }, { status: 500 });
+          return Response.json(
+            {
+              error:
+                "LOVABLE_API_KEY missing. For local dev, copy .dev.vars.example to .dev.vars, paste your key from Lovable → Project Settings → Cloud → Secrets, and restart the dev server.",
+            },
+            { status: 500 },
+          );
         }
         let body: { mode?: Mode; text?: string; targetLanguage?: string };
         try {
